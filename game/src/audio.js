@@ -46,6 +46,11 @@ export function createAudio() {
     orb() { blip(880, 0.12, 'sine', 0.16, 1320); },
     shield() { blip(520, 0.2, 'triangle', 0.18, 780); },
     dash() { blip(240, 0.16, 'sawtooth', 0.07, 620); },
+    shoot() { blip(720, 0.07, 'square', 0.06, 180); },
+    kill() { blip(220, 0.18, 'sawtooth', 0.12, 50); },
+    pickup() { blip(990, 0.1, 'sine', 0.15, 1180); },
+    delivered() { blip(660, 0.28, 'sine', 0.18, 1320); },
+    lost() { blip(330, 0.3, 'triangle', 0.12, 110); },
     hit() { blip(160, 0.3, 'square', 0.16, 60); },
     clear() { blip(660, 0.28, 'sine', 0.18, 990); },
     over() { blip(320, 0.7, 'triangle', 0.2, 55); }

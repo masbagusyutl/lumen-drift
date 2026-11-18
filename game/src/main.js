@@ -7,9 +7,9 @@
 // &seed=N) stages that scene instead of running the loop, paints it twice
 // and sets window.__shotReady so a screenshot tool knows the frame is final.
 
-import { BEST_KEY, STEP } from './config.js';
+import { BEST_KEY, DELIVERY, STEP } from './config.js';
 import { createRandom } from './random.js';
-import { createWorld, EVENT_CLEAR, EVENT_DASH, EVENT_HIT, EVENT_ORB, EVENT_OVER, EVENT_SHIELD } from './world.js';
+import { createWorld, EVENT_CLEAR, EVENT_DASH, EVENT_DELIVERED, EVENT_HIT, EVENT_KILL, EVENT_LOST, EVENT_ORB, EVENT_OVER, EVENT_PICKUP, EVENT_SHIELD, EVENT_SHOT } from './world.js';
 import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
 import { createAudio } from './audio.js';
 import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
@@ -72,7 +72,7 @@ function runGame() {
     world.reset();
     accumulator = 0;
     screen = SCREEN_PLAY;
-    announce('Playing. Three hull. Clear the sector by collecting its orbs.');
+    announce('Playing. Three hull. Clear the sector by collecting its orbs — and watch for hunters.');
   }
 
   function endGame() {
@@ -105,10 +105,25 @@ function runGame() {
     }
     const control = input.direction(world.state.ship);
     control.dash = input.consumeDash();
+    control.fire = input.firing();
     const events = world.step(STEP, control, false);
     if (events & EVENT_ORB) audio.orb();
     if (events & EVENT_SHIELD) audio.shield();
     if (events & EVENT_DASH) audio.dash();
+    if (events & EVENT_SHOT) audio.shoot();
+    if (events & EVENT_KILL) audio.kill();
+    if (events & EVENT_PICKUP) {
+      audio.pickup();
+      announce(`Cargo aboard — deliver it to the beacon before the timer runs out.`);
+    }
+    if (events & EVENT_DELIVERED) {
+      audio.delivered();
+      announce(`Delivered. +${DELIVERY.bonus} points.`);
+    }
+    if (events & EVENT_LOST) {
+      audio.lost();
+      announce('Delivery timed out — the parcel is gone.');
+    }
     if (events & EVENT_CLEAR) {
       audio.clear();
       announce(`Sector clear. Sector ${world.state.sector} begins.`);

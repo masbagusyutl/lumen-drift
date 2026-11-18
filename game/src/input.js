@@ -14,6 +14,9 @@ const KEY_DIRECTIONS = {
   ArrowDown: { x: 0, y: 1 }, KeyS: { x: 0, y: 1 }
 };
 
+/** Hold J or X to fire the blaster in the direction the ship points. */
+const FIRE_KEYS = new Set(['KeyJ', 'KeyX']);
+
 export function createInput(canvas) {
   const held = new Set();
   let actions = 0;
@@ -23,7 +26,7 @@ export function createInput(canvas) {
   let pointerY = 0;
 
   window.addEventListener('keydown', (event) => {
-    if (KEY_DIRECTIONS[event.code] || event.code === 'Space') event.preventDefault();
+    if (KEY_DIRECTIONS[event.code] || FIRE_KEYS.has(event.code) || event.code === 'Space') event.preventDefault();
     if (event.repeat) return;
     held.add(event.code);
     if (event.code === 'Space') {
@@ -81,6 +84,11 @@ export function createInput(canvas) {
       const was = dashQueued;
       dashQueued = false;
       return was;
+    },
+    /** True while a fire key is held down. */
+    firing() {
+      for (const code of held) if (FIRE_KEYS.has(code)) return true;
+      return false;
     },
     /** The one-shot actions since the last call, as a bitmask; reading spends them. */
     takeActions() {

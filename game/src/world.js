@@ -4,8 +4,11 @@
 // hull, and at zero hull the run ends. Orbs collected in quick succession
 // build a combo multiplier, and a shield pickup now and then forgives a hit.
 
-import { ASTEROID, COMBO, FIELD, HULL, ORB, POOL, SECTOR, SHIELD } from './config.js';
+import { ASTEROID, BLASTER, COMBO, DELIVERY, FIELD, HULL, HUNTER, ORB, POOL, SECTOR, SHIELD } from './config.js';
 import { createShip, resetShip, stepShip, tryDash } from './ship.js';
+import { createHunter, hunterCap, stepHunter } from './hunters.js';
+import { createBlaster, resetBlaster, stepBlaster, stepBolts, tryFire } from './blaster.js';
+import { createDelivery, resetDelivery, stepDelivery } from './delivery.js';
 
 export const EVENT_ORB = 1;
 export const EVENT_HIT = 2;
@@ -13,6 +16,11 @@ export const EVENT_OVER = 4;
 export const EVENT_CLEAR = 8;
 export const EVENT_SHIELD = 16;
 export const EVENT_DASH = 32;
+export const EVENT_SHOT = 64;
+export const EVENT_KILL = 128;
+export const EVENT_PICKUP = 256;
+export const EVENT_DELIVERED = 512;
+export const EVENT_LOST = 1024;
 
 function makeAsteroidShape(random) {
   const points = [];
@@ -29,6 +37,10 @@ export function createWorld(random) {
   const state = {
     ship: createShip(),
     asteroids: [],
+    hunters: [],
+    bolts: [],
+    blaster: createBlaster(),
+    delivery: createDelivery(),
     orbs: [],
     pickups: [],
     particles: [],
@@ -40,11 +52,14 @@ export function createWorld(random) {
     sector: 1,
     orbsCollected: 0,
     orbsSpawned: 0,
+    huntersDown: 0,
+    deliveriesMade: 0,
     time: 0,
     bannerTimer: 0,
     shake: 0,
     over: false,
-    asteroidTimer: ASTEROID.firstDelay
+    asteroidTimer: ASTEROID.firstDelay,
+    hunterTimer: HUNTER.firstDelay
   };
 
   function spawnAsteroid() {
@@ -90,6 +105,12 @@ export function createWorld(random) {
     });
   }
 
+  function spawnHunter() {
+    if (state.hunters.length >= hunterCap(state.sector)) return;
+    if (state.hunters.length >= POOL.hunters) return;
+    state.hunters.push(createHunter(random, state.sector));
+  }
+
   function burst(x, y, color, count, speed) {
     for (let i = 0; i < count; i += 1) {
       if (state.particles.length >= POOL.particles) return;
@@ -121,9 +142,10 @@ export function createWorld(random) {
     return false;
   }
 
-  function hitAsteroid(asteroid) {
+  /** A threat — a rock or a hunter — reached the ship: sparks, shake, hull. */
+  function hitByThreat(x, y) {
     burst(state.ship.x, state.ship.y, '#ff5d73', 22, 260);
-    burst(asteroid.x, asteroid.y, '#c7d5ee', 10, 170);
+    burst(x, y, '#c7d5ee', 10, 170);
     state.shake = 0.45;
     state.combo = 0;
     state.comboTimer = 0;
@@ -142,6 +164,10 @@ export function createWorld(random) {
     return EVENT_HIT;
   }
 
+  function hitAsteroid(asteroid) {
+    return hitByThreat(asteroid.x, asteroid.y);
+  }
+
   function clearSector() {
     state.score += SECTOR.bonus * state.sector;
     state.sector += 1;
@@ -155,6 +181,10 @@ export function createWorld(random) {
   function reset() {
     resetShip(state.ship);
     state.asteroids.length = 0;
+    state.hunters.length = 0;
+    state.bolts.length = 0;
+    resetBlaster(state.blaster);
+    resetDelivery(state.delivery);
     state.orbs.length = 0;
     state.pickups.length = 0;
     state.particles.length = 0;
@@ -166,18 +196,22 @@ export function createWorld(random) {
     state.sector = 1;
     state.orbsCollected = 0;
     state.orbsSpawned = 0;
+    state.huntersDown = 0;
+    state.deliveriesMade = 0;
     state.time = 0;
     state.bannerTimer = 0;
     state.shake = 0;
     state.over = false;
     state.asteroidTimer = ASTEROID.firstDelay;
+    state.hunterTimer = HUNTER.firstDelay;
     for (let i = 0; i < 3; i += 1) spawnOrb();
   }
 
   /**
-   * Advance one fixed step. `control` is {x, y, dash} — a thrust direction
-   * and a dash request. `attract` runs the field without a pilot (the title
-   * screen's backdrop): rocks and orbs drift, nothing collides or scores.
+   * Advance one fixed step. `control` is {x, y, dash, fire} — a thrust
+   * direction, a dash request and a held trigger. `attract` runs the field
+   * without a pilot (the title screen's backdrop): rocks and orbs drift,
+   * nothing collides or scores.
    * Returns the events that happened, as a bitmask.
    */
   function step(dt, control, attract = false) {
@@ -192,6 +226,22 @@ export function createWorld(random) {
 
     if (!attract && control.dash && tryDash(state.ship, control)) events |= EVENT_DASH;
     stepShip(state.ship, dt, attract ? { x: 0, y: 0 } : control);
+    stepBlaster(state.blaster, dt);
+    if (!attract && !state.over && control.fire && tryFire(state.blaster, state.ship, state.bolts)) {
+      events |= EVENT_SHOT;
+    }
+
+    if (!attract) {
+      state.hunterTimer -= dt;
+      if (state.hunterTimer <= 0) {
+        spawnHunter();
+        const interval = Math.max(
+          HUNTER.minInterval,
+          HUNTER.interval - (state.sector - 1) * HUNTER.intervalPerSector
+        );
+        state.hunterTimer = interval * random.range(0.8, 1.2);
+      }
+    }
 
     state.asteroidTimer -= dt;
     if (state.asteroidTimer <= 0) {
@@ -221,6 +271,56 @@ export function createWorld(random) {
       }
     }
 
+    // Hunters chase the ship; a hunter that reaches it explodes on the hull.
+    for (let i = state.hunters.length - 1; i >= 0; i -= 1) {
+      const hunter = state.hunters[i];
+      if (!attract) stepHunter(hunter, state.ship, dt, state.sector, state.time);
+      if (attract || state.over) continue;
+      if (Math.hypot(hunter.x - state.ship.x, hunter.y - state.ship.y) < hunter.radius * 0.85 + 14
+        && state.ship.invulnerable <= 0) {
+        state.hunters.splice(i, 1);
+        events |= hitByThreat(hunter.x, hunter.y);
+      }
+    }
+
+    // Bolts fly, then meet hunters and rocks. A kill pays points and sparks.
+    stepBolts(state.bolts, dt);
+    for (let i = state.bolts.length - 1; i >= 0; i -= 1) {
+      const bolt = state.bolts[i];
+      let spent = bolt.life <= 0
+        || bolt.x < -20 || bolt.x > FIELD.width + 20
+        || bolt.y < -20 || bolt.y > FIELD.height + 20;
+      if (!spent && !attract && !state.over) {
+        for (let j = state.hunters.length - 1; j >= 0; j -= 1) {
+          const hunter = state.hunters[j];
+          if (Math.hypot(hunter.x - bolt.x, hunter.y - bolt.y) < hunter.radius + BLASTER.radius) {
+            burst(hunter.x, hunter.y, '#ff4d6d', 18, 240);
+            burst(hunter.x, hunter.y, '#ffd166', 8, 160);
+            state.hunters.splice(j, 1);
+            state.score += HUNTER.score;
+            state.huntersDown += 1;
+            events |= EVENT_KILL;
+            spent = true;
+            break;
+          }
+        }
+      }
+      if (!spent && !attract && !state.over) {
+        for (let j = state.asteroids.length - 1; j >= 0; j -= 1) {
+          const rock = state.asteroids[j];
+          if (Math.hypot(rock.x - bolt.x, rock.y - bolt.y) < rock.radius * 0.9 + BLASTER.radius) {
+            burst(rock.x, rock.y, '#c7d5ee', 14, 200);
+            state.asteroids.splice(j, 1);
+            state.score += 15;
+            events |= EVENT_KILL;
+            spent = true;
+            break;
+          }
+        }
+      }
+      if (spent) state.bolts.splice(i, 1);
+    }
+
     if (!attract && !state.over) {
       for (let i = state.orbs.length - 1; i >= 0; i -= 1) {
         const orb = state.orbs[i];
@@ -241,6 +341,18 @@ export function createWorld(random) {
           burst(pickup.x, pickup.y, '#6effa8', 14, 200);
           events |= EVENT_SHIELD;
         }
+      }
+      const delivery = stepDelivery(state.delivery, state.ship, random, dt);
+      if (delivery === 'pickup') {
+        burst(state.ship.x, state.ship.y, '#ff9f43', 14, 200);
+        events |= EVENT_PICKUP;
+      } else if (delivery === 'delivered') {
+        state.score += DELIVERY.bonus;
+        state.deliveriesMade += 1;
+        burst(state.ship.x, state.ship.y, '#8affc1', 26, 280);
+        events |= EVENT_DELIVERED;
+      } else if (delivery === 'lost') {
+        events |= EVENT_LOST;
       }
     }
 

@@ -11,11 +11,11 @@ import { EVENT_CLEAR, EVENT_OVER } from './world.js';
 import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 
 const TITLE_SECONDS = 6;
-const PLAY_SECONDS = 16;
+const PLAY_SECONDS = 20;
 const CLEAR_LIMIT_SECONDS = 150;
 const OVER_LIMIT_SECONDS = 240;
 
-/** Steer toward a point, backing off from any rock that is close ahead. */
+/** Steer toward a point, backing off from any rock — or hunter — close ahead. */
 function steer(state, targetX, targetY, care) {
   let x = targetX - state.ship.x;
   let y = targetY - state.ship.y;
@@ -33,20 +33,73 @@ function steer(state, targetX, targetY, care) {
         y += (dy / (Math.hypot(dx, dy) || 1)) * weight;
       }
     }
+    for (const hunter of state.hunters) {
+      const dx = state.ship.x - hunter.x;
+      const dy = state.ship.y - hunter.y;
+      const gap = Math.hypot(dx, dy) - hunter.radius;
+      if (gap < 110) {
+        const weight = (110 - gap) / 110 * 1.4;
+        x += (dx / (Math.hypot(dx, dy) || 1)) * weight;
+        y += (dy / (Math.hypot(dx, dy) || 1)) * weight;
+      }
+    }
   }
   const length = Math.hypot(x, y) || 1;
-  return { x: x / length, y: y / length, dash: false };
+  return { x: x / length, y: y / length, dash: false, fire: false };
 }
 
-function nearestOrbControl(state) {
+/** Where the pilot heads next: the beacon while carrying, a nearby parcel
+ *  when one waits, otherwise the nearest data-orb. */
+function pilotTarget(state) {
+  const delivery = state.delivery;
+  if (delivery.carrying && delivery.zone) return { x: delivery.zone.x, y: delivery.zone.y };
+  if (delivery.parcel) {
+    const distance = Math.hypot(delivery.parcel.x - state.ship.x, delivery.parcel.y - state.ship.y);
+    if (distance < 460) return { x: delivery.parcel.x, y: delivery.parcel.y };
+  }
   let orb = null;
   let best = Infinity;
   for (const candidate of state.orbs) {
     const distance = Math.hypot(candidate.x - state.ship.x, candidate.y - state.ship.y);
     if (distance < best) { best = distance; orb = candidate; }
   }
-  if (!orb) return { x: 0, y: 0, dash: false };
-  return steer(state, orb.x, orb.y, true);
+  if (!orb) return { x: FIELD.width / 2, y: FIELD.height / 2 };
+  return { x: orb.x, y: orb.y };
+}
+
+/** Is `target` roughly where the ship points, and close enough to shoot at? */
+function inFiringLine(state, targetX, targetY, maxDistance) {
+  const dx = targetX - state.ship.x;
+  const dy = targetY - state.ship.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance > maxDistance) return false;
+  const aim = Math.atan2(dy, dx);
+  let diff = aim - state.ship.angle;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return Math.abs(diff) < 0.6;
+}
+
+/** The collector pilot: flies the delivery loop, dodges, and fires at any
+ *  hunter — or rock — that crosses its sights. */
+function pilotControl(state) {
+  const target = pilotTarget(state);
+  const control = steer(state, target.x, target.y, true);
+  let fire = false;
+  for (const hunter of state.hunters) {
+    if (inFiringLine(state, hunter.x, hunter.y, 400)) { fire = true; break; }
+  }
+  if (!fire) {
+    for (const rock of state.asteroids) {
+      if (inFiringLine(state, rock.x, rock.y, 260)) { fire = true; break; }
+    }
+  }
+  control.fire = fire;
+  return control;
+}
+
+function nearestOrbControl(state) {
+  return pilotControl(state);
 }
 
 function recklessControl(state) {
@@ -85,6 +138,15 @@ export function stageShot(name, world) {
   if (name === 'play') {
     for (let i = 0; i < PLAY_SECONDS / STEP; i += 1) {
       if (world.step(STEP, nearestOrbControl(state), false) & EVENT_OVER) break;
+    }
+    // If a hunter is hunting, squeeze off a final burst so a bolt is in
+    // flight in the frame — the shot must show the blaster, not just the ship.
+    if (state.hunters.length > 0 && !state.over) {
+      for (let i = 0; i < 4; i += 1) {
+        const control = nearestOrbControl(state);
+        control.fire = true;
+        world.step(STEP, control, false);
+      }
     }
     return { screen: SCREEN_PLAY, best: state.score };
   }

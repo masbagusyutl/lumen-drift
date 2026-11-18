@@ -4,8 +4,9 @@
 // ship with an engine trail, pulsing data-orbs, craggy asteroids, and a HUD
 // that keeps score, combo, sector, hull and dash readiness always visible.
 
-import { COMBO, FIELD, HULL, ORB, PALETTE, SECTOR, SHIELD } from './config.js';
+import { BLASTER, COMBO, DELIVERY, FIELD, HULL, HUNTER, ORB, PALETTE, SECTOR, SHIELD } from './config.js';
 import { dashReadiness } from './ship.js';
+import { heatLevel } from './blaster.js';
 import { createRandom } from './random.js';
 
 export const SCREEN_TITLE = 'title';
@@ -88,6 +89,110 @@ function drawPickups(ctx, state) {
     ctx.fill();
     ctx.restore();
   }
+}
+
+function drawDelivery(ctx, state) {
+  const delivery = state.delivery;
+  if (delivery.parcel) {
+    const parcel = delivery.parcel;
+    const pulse = 1 + 0.2 * Math.sin(state.time * 3 + parcel.phase);
+    ctx.save();
+    ctx.translate(parcel.x, parcel.y);
+    ctx.shadowColor = PALETTE.parcel;
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = PALETTE.parcel;
+    ctx.fillRect(-9 * pulse, -9 * pulse, 18 * pulse, 18 * pulse);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#fff3e0';
+    ctx.fillRect(-3, -3, 6, 6);
+    ctx.strokeStyle = PALETTE.parcel;
+    ctx.globalAlpha = 0.6 + 0.4 * Math.sin(state.time * 3 + parcel.phase);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, DELIVERY.parcelRadius + 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (delivery.zone) {
+    const zone = delivery.zone;
+    ctx.save();
+    // Beacon pillar, so the drop zone reads from across the field.
+    const beam = ctx.createLinearGradient(zone.x, 0, zone.x, zone.y);
+    beam.addColorStop(0, 'rgba(138, 255, 193, 0)');
+    beam.addColorStop(1, 'rgba(138, 255, 193, 0.22)');
+    ctx.fillStyle = beam;
+    ctx.fillRect(zone.x - 14, 0, 28, zone.y);
+    ctx.strokeStyle = PALETTE.delivery;
+    ctx.shadowColor = PALETTE.delivery;
+    ctx.shadowBlur = 16;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([12, 8]);
+    ctx.lineDashOffset = -state.time * 30;
+    ctx.beginPath();
+    ctx.arc(zone.x, zone.y, DELIVERY.zoneRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = PALETTE.delivery;
+    ctx.font = '800 17px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('DROP', zone.x, zone.y - DELIVERY.zoneRadius - 10);
+    ctx.restore();
+  }
+  if (delivery.carrying) {
+    // A dotted guide from the ship to the beacon, with the parcel riding along.
+    ctx.save();
+    ctx.strokeStyle = PALETTE.delivery;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 10]);
+    ctx.beginPath();
+    ctx.moveTo(state.ship.x, state.ship.y);
+    ctx.lineTo(delivery.zone.x, delivery.zone.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawHunters(ctx, state) {
+  for (const hunter of state.hunters) {
+    ctx.save();
+    ctx.translate(hunter.x, hunter.y);
+    ctx.rotate(hunter.angle);
+    ctx.shadowColor = PALETTE.hunter;
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = PALETTE.hunter;
+    // A dart with swept wings: it reads as a pursuer, not another rock.
+    ctx.beginPath();
+    ctx.moveTo(17, 0);
+    ctx.lineTo(-10, 10);
+    ctx.lineTo(-5, 0);
+    ctx.lineTo(-10, -10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = PALETTE.hunterEye;
+    ctx.beginPath();
+    ctx.arc(6, 0, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawBolts(ctx, state) {
+  ctx.save();
+  ctx.strokeStyle = PALETTE.bolt;
+  ctx.shadowColor = PALETTE.bolt;
+  ctx.shadowBlur = 10;
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = 'round';
+  for (const bolt of state.bolts) {
+    ctx.beginPath();
+    ctx.moveTo(bolt.x - bolt.vx * 0.022, bolt.y - bolt.vy * 0.022);
+    ctx.lineTo(bolt.x, bolt.y);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawAsteroids(ctx, state) {
@@ -254,6 +359,33 @@ function drawHud(ctx, state, best) {
   ctx.fillRect(FIELD.width - 108, 44, 86, 6);
   ctx.fillStyle = PALETTE.ship;
   ctx.fillRect(FIELD.width - 108, 44, 86 * dashReadiness(state.ship), 6);
+
+  // Blaster heat, under the dash bar: full means the gun is locked.
+  const heat = heatLevel(state.blaster);
+  ctx.fillStyle = PALETTE.muted;
+  ctx.fillText(state.blaster.overheated > 0 ? 'OVERHEAT' : 'HEAT', FIELD.width - 22, 64);
+  ctx.fillStyle = PALETTE.hudBar;
+  ctx.fillRect(FIELD.width - 108, 70, 86, 6);
+  ctx.fillStyle = heat > 0.85 || state.blaster.overheated > 0 ? PALETTE.danger : PALETTE.bolt;
+  ctx.fillRect(FIELD.width - 108, 70, 86 * heat, 6);
+
+  // Delivery status: a waiting parcel, or the timer on the one aboard.
+  const delivery = state.delivery;
+  ctx.textAlign = 'center';
+  if (delivery.carrying) {
+    const seconds = Math.max(0, delivery.timer);
+    ctx.font = '700 17px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = seconds < 4 ? PALETTE.danger : PALETTE.delivery;
+    ctx.fillText(`DELIVER ${seconds.toFixed(1)}s`, FIELD.width / 2, 96);
+    ctx.fillStyle = PALETTE.hudBar;
+    ctx.fillRect(FIELD.width / 2 - 70, 102, 140, 5);
+    ctx.fillStyle = seconds < 4 ? PALETTE.danger : PALETTE.delivery;
+    ctx.fillRect(FIELD.width / 2 - 70, 102, 140 * (seconds / DELIVERY.timeLimit), 5);
+  } else if (delivery.parcel) {
+    ctx.font = '600 15px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = PALETTE.parcel;
+    ctx.fillText('CARGO WAITING — GRAB IT', FIELD.width / 2, 96);
+  }
   ctx.restore();
 }
 
@@ -277,20 +409,24 @@ function drawBanner(ctx, state) {
 }
 
 function drawTitle(ctx, state, best) {
-  centredText(ctx, 'LUMEN DRIFT', 218, '800 92px "Segoe UI", system-ui, sans-serif', PALETTE.ship);
-  centredText(ctx, 'a neon courier run', 262, '600 26px "Segoe UI", system-ui, sans-serif', PALETTE.orb);
-  centredText(ctx, 'Pilot the courier ship. Gather every data-orb in the sector to clear it.', 336,
+  centredText(ctx, 'LUMEN DRIFT', 206, '800 92px "Segoe UI", system-ui, sans-serif', PALETTE.ship);
+  centredText(ctx, 'a neon courier run — under fire', 250, '600 26px "Segoe UI", system-ui, sans-serif', PALETTE.orb);
+  centredText(ctx, 'Pilot the courier ship. Gather every data-orb in the sector to clear it.', 322,
     '500 22px "Segoe UI", system-ui, sans-serif', PALETTE.text);
-  centredText(ctx, 'Asteroids cost hull — three hits end the run. Chain orbs fast to raise your combo.', 368,
+  centredText(ctx, 'Hunter drones chase you — blast them with J or X, and mind the gun’s heat.', 354,
     '500 22px "Segoe UI", system-ui, sans-serif', PALETTE.text);
-  centredText(ctx, 'FLY  Arrow keys / WASD / drag      DASH  Space      PAUSE  P', 428,
+  centredText(ctx, 'Grab cargo parcels and deliver them to the beacon before the timer runs out.', 386,
+    '500 22px "Segoe UI", system-ui, sans-serif', PALETTE.text);
+  centredText(ctx, 'Asteroids cost hull — three hits end the run. Chain orbs fast to raise your combo.', 418,
+    '500 22px "Segoe UI", system-ui, sans-serif', PALETTE.text);
+  centredText(ctx, 'FLY  Arrow keys / WASD / drag      DASH  Space      FIRE  J or X      PAUSE  P', 478,
     '700 21px "Segoe UI", system-ui, sans-serif', PALETTE.shield);
   if (best > 0) {
-    centredText(ctx, `BEST ${best}`, 478, '700 22px "Segoe UI", system-ui, sans-serif', PALETTE.muted);
+    centredText(ctx, `BEST ${best}`, 528, '700 22px "Segoe UI", system-ui, sans-serif', PALETTE.muted);
   }
   const blink = Math.floor(state.time * 1.6) % 2 === 0;
   if (blink) {
-    centredText(ctx, 'PRESS SPACE OR CLICK TO LAUNCH', 548,
+    centredText(ctx, 'PRESS SPACE OR CLICK TO LAUNCH', 592,
       '800 27px "Segoe UI", system-ui, sans-serif', PALETTE.text);
   }
 }
@@ -305,6 +441,8 @@ function drawOver(ctx, state, best) {
   centredText(ctx, `SCORE ${state.score}`, 372, '800 44px "Segoe UI", system-ui, sans-serif', PALETTE.text);
   centredText(ctx, `BEST ${Math.max(best, state.score)}  ·  SECTOR ${state.sector}  ·  BEST COMBO x${1 + Math.floor(Math.max(0, state.bestCombo - 1) / 4)}`,
     416, '600 21px "Segoe UI", system-ui, sans-serif', PALETTE.muted);
+  centredText(ctx, `HUNTERS DOWN ${state.huntersDown}  ·  DELIVERIES ${state.deliveriesMade}`,
+    448, '600 21px "Segoe UI", system-ui, sans-serif', PALETTE.muted);
   const blink = Math.floor(state.time * 1.6) % 2 === 0;
   if (blink) {
     centredText(ctx, 'PRESS SPACE OR CLICK TO FLY AGAIN', 486,
@@ -345,9 +483,12 @@ export function createRenderer(canvas) {
         ctx.translate((Math.random() - 0.5) * amount, (Math.random() - 0.5) * amount);
       }
       drawBackdrop(ctx, state);
+      drawDelivery(ctx, state);
       drawOrbs(ctx, state);
       drawPickups(ctx, state);
+      drawHunters(ctx, state);
       drawAsteroids(ctx, state);
+      drawBolts(ctx, state);
       drawParticles(ctx, state);
       drawShip(ctx, state);
       ctx.restore();
